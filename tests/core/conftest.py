@@ -16,12 +16,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 import torch
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.db import connect
+from ase.io import write
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 from syrupy.extensions.amber import AmberSnapshotExtension
 
-from fairchem.core.datasets import AseDBDataset
+from fairchem.core.datasets.ase_datasets import AseDBDataset, AseReadDataset
 from fairchem.core.units.mlip_unit.mlip_unit import (
     UNIT_INFERENCE_CHECKPOINT,
     UNIT_RESUME_CONFIG,
@@ -192,27 +194,36 @@ def dummy_binary_dataset_path(tmpdir_factory, dummy_element_refs):
                 + 0.05 * rng.random() * dummy_element_refs.mean()
             )
             atoms = structure.to_ase_atoms()
-            db.write(
+            atoms.calc = SinglePointCalculator(
                 atoms,
-                data={
-                    "sid": f"structure_{i}",
-                    "energy": energy,
-                    "forces": rng.random((2, 3)),
-                    "stress": rng.random((3, 3)),
-                },
+                energy=energy,
+                forces=rng.random((2, 3)),
+                stress=rng.random((3, 3)),
             )
+            # write to the lmdb file
+            db.write(atoms, data={"sid": f"structure_{i}"})
 
-    return tmpdir / "dummy.aselmdb"
+            # write it as a cif file as well
+            write(str(tmpdir / f"structure_{i}.cif"), atoms)
+
+    return tmpdir
+
+
+@pytest.fixture(scope="session", params=["asedb", "cif"])
+def dummy_binary_dataset(dummy_binary_dataset_path, request):
+    config = dict(src=str(dummy_binary_dataset_path))
+
+    if request.param == "cif":
+        config["pattern"] = "*.cif"
+        return AseReadDataset(config=config)
+    else:
+        return AseDBDataset(config=config)
 
 
 @pytest.fixture(scope="session")
-def dummy_binary_dataset(dummy_binary_dataset_path):
-    return AseDBDataset(
-        config={
-            "src": str(dummy_binary_dataset_path),
-            "a2g_args": {"r_data_keys": ["energy", "forces", "stress"]},
-        }
-    )
+def dummy_binary_db_dataset(dummy_binary_dataset_path):
+    config = dict(src=str(dummy_binary_dataset_path))
+    return AseDBDataset(config=config)
 
 
 @pytest.fixture(autouse=True)
